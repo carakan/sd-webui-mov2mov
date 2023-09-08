@@ -5,13 +5,13 @@ import sys
 import gradio as gr
 import platform
 import modules.scripts as scripts
-from modules import script_callbacks, shared, ui_postprocessing, call_queue
+from modules import script_callbacks, shared, ui_postprocessing, call_queue, sd_samplers
 from modules.call_queue import wrap_gradio_gpu_call
 from modules.sd_samplers import samplers_for_img2img
-from modules.shared import opts
+from modules.shared import opts, cmd_opts
 from modules.ui import paste_symbol, clear_prompt_symbol, extra_networks_symbol, apply_style_symbol, save_style_symbol, \
     create_refresh_button, create_sampler_and_steps_selection, ordered_ui_categories, switch_values_symbol, \
-    create_seed_inputs, create_override_settings_dropdown
+    create_override_settings_dropdown
 from modules.ui_common import folder_symbol, plaintext_to_html
 from modules.ui_components import ToolButton, FormRow, FormGroup
 import modules.generation_parameters_copypaste as parameters_copypaste
@@ -21,7 +21,45 @@ from scripts.m2m_config import mov2mov_outpath_samples, mov2mov_output_dir
 from scripts.m2m_modnet import modnet_models
 
 html_id = "mov2mov"
+# Using constants for these since the variation selector isn't visible.
+# Important that they exactly match script.js for tooltip to work.
+random_symbol = '\U0001f3b2\ufe0f'  # 🎲️
+reuse_symbol = '\u267b\ufe0f'  # ♻️
+paste_symbol = '\u2199\ufe0f'  # ↙
+refresh_symbol = '\U0001f504'  # 🔄
+save_style_symbol = '\U0001f4be'  # 💾
+apply_style_symbol = '\U0001f4cb'  # 📋
+clear_prompt_symbol = '\U0001F5D1'  # 🗑️
+extra_networks_symbol = '\U0001F3B4'  # 🎴
+switch_values_symbol = '\U000021C5' # ⇅
 
+def create_seed_inputs(target_interface):
+    with FormRow(elem_id=f"{target_interface}_seed_row", variant="compact"):
+        if cmd_opts.use_textbox_seed:
+            seed = gr.Textbox(label='Seed', value="", elem_id=f"{target_interface}_seed")
+        else:
+            seed = gr.Number(label='Seed', value=-1, elem_id=f"{target_interface}_seed", precision=0)
+        random_seed = ToolButton(random_symbol, elem_id=f"{target_interface}_random_seed", label='Random seed')
+        reuse_seed = ToolButton(reuse_symbol, elem_id=f"{target_interface}_reuse_seed", label='Reuse seed')
+        seed_checkbox = gr.Checkbox(label='Extra', elem_id=f"{target_interface}_subseed_show", value=False)
+    # Components to show/hide based on the 'Extra' checkbox
+    seed_extras = []
+    with FormRow(visible=False, elem_id=f"{target_interface}_subseed_row") as seed_extra_row_1:
+        seed_extras.append(seed_extra_row_1)
+        subseed = gr.Number(label='Variation seed', value=-1, elem_id=f"{target_interface}_subseed", precision=0)
+        random_subseed = ToolButton(random_symbol, elem_id=f"{target_interface}_random_subseed")
+        reuse_subseed = ToolButton(reuse_symbol, elem_id=f"{target_interface}_reuse_subseed")
+        subseed_strength = gr.Slider(label='Variation strength', value=0.0, minimum=0, maximum=1, step=0.01, elem_id=f"{target_interface}_subseed_strength")
+    with FormRow(visible=False) as seed_extra_row_2:
+        seed_extras.append(seed_extra_row_2)
+        seed_resize_from_w = gr.Slider(minimum=0, maximum=2048, step=8, label="Resize seed from width", value=0, elem_id=f"{target_interface}_seed_resize_from_w")
+        seed_resize_from_h = gr.Slider(minimum=0, maximum=2048, step=8, label="Resize seed from height", value=0, elem_id=f"{target_interface}_seed_resize_from_h")
+    random_seed.click(fn=None, _js="function(){setRandomSeed('" + target_interface + "_seed')}", show_progress=False, inputs=[], outputs=[])
+    random_subseed.click(fn=None, _js="function(){setRandomSeed('" + target_interface + "_subseed')}", show_progress=False, inputs=[], outputs=[])
+    def change_visibility(show):
+        return {comp: gr_show(show) for comp in seed_extras}
+    seed_checkbox.change(change_visibility, show_progress=False, inputs=[seed_checkbox], outputs=seed_extras)
+    return seed, reuse_seed, subseed, reuse_subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w, seed_checkbox
 
 def create_toprow():
     with gr.Row(elem_id=f"{html_id}_toprow", variant="compact"):
@@ -233,7 +271,9 @@ def on_ui_tabs():
 
                 for category in ordered_ui_categories():
                     if category == "sampler":
-                        steps, sampler_index = create_sampler_and_steps_selection(samplers_for_img2img, "mov2mov")
+                        steps, sampler_name = create_sampler_and_steps_selection(sd_samplers.visible_sampler_names(), "mov2mov")
+                        # steps, sampler_name = create_sampler_and_steps_selection(sd_samplers.visible_sampler_names(), "img2img")
+
 
                     elif category == "dimensions":
                         with FormRow():
@@ -323,7 +363,7 @@ def on_ui_tabs():
                            mov2mov_negative_prompt,
                            init_mov,
                            steps,
-                           sampler_index,
+                           sampler_name,
                            restore_faces,
                            tiling,
                            # extract_characters,
